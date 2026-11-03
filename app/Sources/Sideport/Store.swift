@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ServiceManagement
 import SQLite3
 import UserNotifications
 
@@ -29,8 +30,26 @@ final class Store: ObservableObject {
     @Published var refreshWhenDaysLeft: Double = UserDefaults.standard.object(forKey: "refreshDays") as? Double ?? 2 {
         didSet { UserDefaults.standard.set(refreshWhenDaysLeft, forKey: "refreshDays") }
     }
+    /// The library folder: every IPA in it shows up as an app, like a games folder in an emulator.
     @Published var watchFolder: String = UserDefaults.standard.string(forKey: "watchFolder") ?? (NSHomeDirectory() + "/IPAs") {
-        didSet { UserDefaults.standard.set(watchFolder, forKey: "watchFolder") }
+        didSet {
+            UserDefaults.standard.set(watchFolder, forKey: "watchFolder")
+            Task { await syncFolder() }
+        }
+    }
+    /// IPAs removed from the library, so the folder sync doesn't bring them back.
+    private var hiddenIPAs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "hiddenIPAs") ?? []) {
+        didSet { UserDefaults.standard.set(Array(hiddenIPAs), forKey: "hiddenIPAs") }
+    }
+    @Published var openAtLogin: Bool = SMAppService.mainApp.status == .enabled {
+        didSet {
+            guard openAtLogin != (SMAppService.mainApp.status == .enabled) else { return }
+            do {
+                if openAtLogin { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            } catch {
+                showToast("Couldn't change Open at Login: \(error.localizedDescription)")
+            }
+        }
     }
     @Published var notify: Bool = UserDefaults.standard.object(forKey: "notify") as? Bool ?? true {
         didSet { UserDefaults.standard.set(notify, forKey: "notify") }
@@ -75,7 +94,11 @@ final class Store: ObservableObject {
             await reloadDevices()
             // `open Sideport.app --args -importSideloadly YES` runs the import at launch (used for testing).
             if UserDefaults.standard.bool(forKey: "importSideloadly"), library.isEmpty { await importSideloadly() }
+            await syncFolder()
         }
+        timers.append(Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+            Task { @MainActor in await Store.shared.syncFolder() }
+        })
         timers.append(Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
             Task { @MainActor in await Store.shared.reloadDevices() }
         })
@@ -262,19 +285,73 @@ final class Store: ObservableObject {
                 return
             }
             do {
-                draft = Draft(app: app, info: try await inspect(path), isNew: false)
+                draft = Draft(app: app, info: try await inspect(path), isNew: !app.isInstalled)
             } catch {
                 showToast(error.localizedDescription)
             }
         }
     }
 
-    func remove(_ app: LibraryApp) {
+    enum Removal { case libraryOnly, alsoFromDevice, alsoTrashIPA }
+
+    func remove(_ app: LibraryApp, _ how: Removal = .libraryOnly) {
         library.removeAll { $0.id == app.id }
+        hiddenIPAs.insert(standard(app.ipaPath))
         saveLibrary()
+        switch how {
+        case .libraryOnly:
+            log("Removed \(app.displayName)", "from Sideport", ok: true)
+        case .alsoFromDevice:
+            if let udid = app.deviceUDID, let id = app.installedBundleId {
+                Task { await uninstall(bundleId: id, from: udid) }
+            }
+        case .alsoTrashIPA:
+            if FileManager.default.fileExists(atPath: app.ipaPath) {
+                NSWorkspace.shared.recycle([URL(fileURLWithPath: app.ipaPath)])
+            }
+            log("Removed \(app.displayName)", "and moved its IPA to the Trash", ok: true)
+        }
+        showToast("Removed \(app.displayName)")
+    }
+
+    private func standard(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
+
+    var folderURL: URL { URL(fileURLWithPath: (watchFolder as NSString).expandingTildeInPath) }
+
+    /// Adds IPAs that appeared in the library folder, and points apps at the folder's copy of their IPA.
+    private var syncing = false
+    func syncFolder() async {
+        guard !syncing else { return }
+        syncing = true
+        defer { syncing = false }
+        let files = ((try? FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension.lowercased() == "ipa" }
+        let known = Set(library.map { standard($0.ipaPath) })
+        var changed = false
+        for url in files {
+            let path = standard(url.path)
+            if known.contains(path) || hiddenIPAs.contains(path) { continue }
+            guard let info = try? await inspect(path) else { continue }
+            // An app already in the library (e.g. imported, pointing at Sideloadly's cache) gets this IPA instead.
+            if let i = library.firstIndex(where: { app in
+                app.originalBundleId == info.bundleId
+                    && (!FileManager.default.fileExists(atPath: app.ipaPath) || app.ipaPath.contains("/Caches/sideloadly/"))
+            }) {
+                library[i].backupIPAPath = library[i].backupIPAPath ?? library[i].ipaPath
+                library[i].ipaPath = path
+            } else {
+                var app = LibraryApp(ipaPath: path, originalName: info.name, originalBundleId: info.bundleId,
+                                     version: info.version, iconPath: info.icon)
+                app.account = currentAccount?.email
+                library.append(app)
+            }
+            changed = true
+        }
+        if changed { saveLibrary() }
     }
 
     func update(_ app: LibraryApp) {
+        hiddenIPAs.remove(standard(app.ipaPath))
         if let i = library.firstIndex(where: { $0.id == app.id }) { library[i] = app } else { library.append(app) }
         saveLibrary()
     }
@@ -389,13 +466,15 @@ final class Store: ObservableObject {
             .filter { u == nil || $0.deviceUDID == nil || $0.deviceUDID == u }
             .sorted { a, b in
                 if a.pinned != b.pinned { return a.pinned }
+                if a.isInstalled != b.isInstalled { return a.isInstalled }
+                if !a.isInstalled { return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending }
                 return (a.daysLeft ?? -99) < (b.daysLeft ?? -99)
             }
     }
 
     func refreshAll(onlyDue: Bool = false) {
         let due = appsForSelectedDevice.filter { app in
-            guard app.sourcePath != nil else { return false }
+            guard app.sourcePath != nil, app.isInstalled else { return false }
             if !onlyDue { return true }
             return (app.daysLeft ?? 0) < refreshWhenDaysLeft || hasNewBuild(app)
         }
@@ -431,16 +510,6 @@ final class Store: ObservableObject {
         c.title = "\(app.displayName) expires soon"
         c.body = "Connect your \(app.deviceName ?? "iPhone") and Sideport will refresh it."
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: key, content: c, trigger: nil))
-    }
-
-    // MARK: - IPAs in the watch folder that aren't in the library yet
-
-    func newIPAsInWatchFolder() -> [URL] {
-        let folder = URL(fileURLWithPath: (watchFolder as NSString).expandingTildeInPath)
-        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-        let known = Set(library.map { URL(fileURLWithPath: $0.ipaPath).standardizedFileURL.path })
-        return files.filter { $0.pathExtension.lowercased() == "ipa" && !known.contains($0.standardizedFileURL.path) }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     // MARK: - Import from Sideloadly

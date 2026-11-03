@@ -321,16 +321,20 @@ struct SettingsView: View {
                 Stepper("Refresh when there are less than \(Int(store.refreshWhenDaysLeft)) days left", value: $store.refreshWhenDaysLeft, in: 1...6)
                 Toggle("Notify me when an app is about to expire", isOn: $store.notify)
             }
+            Section("General") {
+                Toggle("Open Sideport when I log in", isOn: $store.openAtLogin)
+                Text("It sits in the menu bar so it can refresh apps on its own.").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
             Section("IPAs") {
                 HStack {
-                    Text("Watch folder")
+                    Text("Library folder")
                     Spacer()
                     Text((store.watchFolder as NSString).abbreviatingWithTildeInPath).foregroundStyle(.secondary)
                     Button("Change…") {
                         if let url = pickFiles(types: [], directories: true).first { store.watchFolder = url.path }
                     }
                 }
-                Text("New IPAs in this folder show up in the library, and apps whose IPA changes there get a \"New build\" badge.")
+                Text("Every IPA in this folder shows up in Sideport, and an app whose IPA changes here gets a \"New build\" badge.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Section("Certificate") {

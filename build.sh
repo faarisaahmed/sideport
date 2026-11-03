@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds Sideport.app into ./build.
 #   ./build.sh            build
-#   ./build.sh --install  build and copy to /Applications
+#   ./build.sh --install  build and copy to ~/Applications (Spotlight and Launchpad find it there)
 set -euo pipefail
 HERE=${0:A:h}
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer MACOSX_DEPLOYMENT_TARGET=13.0
@@ -50,5 +50,7 @@ PLIST
 codesign --force --sign - $APP/Contents/Resources/sideport-engine $APP >/dev/null 2>&1
 print -P "%F{green}Built:%f $APP"
 if [[ ${1:-} == --install ]]; then
-  rm -rf /Applications/Sideport.app && cp -R $APP /Applications/ && print "Installed to /Applications/Sideport.app"
+  mkdir -p ~/Applications
+  rm -rf ~/Applications/Sideport.app && cp -R $APP ~/Applications/ && print "Installed to ~/Applications/Sideport.app"
+  mdimport ~/Applications/Sideport.app 2>/dev/null || true
 fi

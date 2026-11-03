@@ -29,7 +29,7 @@ Needs Xcode (15 or later) and Rust (`brew install rust`).
 
 ```
 ./build.sh             # builds build/Sideport.app
-./build.sh --install   # and copies it to /Applications
+./build.sh --install   # and copies it to ~/Applications, where Spotlight finds it
 ```
 
 `engine/` is the part that talks to Apple and the phone (Rust). `app/` is the Mac app (SwiftUI). The app runs the engine in the background and talks to it over stdin and stdout.

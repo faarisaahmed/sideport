@@ -123,6 +123,8 @@ struct LibraryApp: Codable, Identifiable, Equatable {
     var importedFrom: String?
 
     var displayName: String { options.name.isEmpty ? originalName : options.name }
+    /// False for IPAs that are only in the library folder so far.
+    var isInstalled: Bool { lastSigned != nil || installedBundleId != nil }
     var shownIcon: String? { options.iconPath.isEmpty ? iconPath : options.iconPath }
 
     var sourcePath: String? {

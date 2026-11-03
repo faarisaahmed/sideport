@@ -13,7 +13,7 @@ struct LibraryView: View {
     }
 
     private var dueCount: Int {
-        store.appsForSelectedDevice.filter { ($0.daysLeft ?? 0) < store.refreshWhenDaysLeft || store.hasNewBuild($0) }.count
+        store.appsForSelectedDevice.filter { $0.isInstalled && (($0.daysLeft ?? 0) < store.refreshWhenDaysLeft || store.hasNewBuild($0)) }.count
     }
 
     var body: some View {
@@ -27,7 +27,6 @@ struct LibraryView: View {
                         ForEach(apps) { app in AppCard(app: app) }
                     }
                 }
-                NewIPAsStrip()
             }
             .padding(26)
         }
@@ -60,6 +59,7 @@ struct LibraryView: View {
                 Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer()
+            FolderChip()
             DeviceChip()
             Button {
                 for url in pickFiles(types: ["ipa"], multiple: true, message: "Choose IPAs to add") { store.add(url: url) }
@@ -88,8 +88,8 @@ struct LibraryView: View {
     }
 
     private var subtitle: String {
-        let all = store.appsForSelectedDevice
-        if all.isEmpty { return "Drop an IPA anywhere in this window to get started." }
+        let all = store.appsForSelectedDevice.filter(\.isInstalled)
+        if all.isEmpty { return "Drop an IPA anywhere in this window, or put some in your library folder." }
         let expired = all.filter { $0.health == .expired }.count
         if expired > 0 { return "\(expired) expired, \(dueCount) to refresh." }
         if dueCount > 0 { return "\(dueCount) of \(all.count) due for a refresh." }
@@ -133,10 +133,38 @@ struct DeviceChip: View {
     }
 }
 
+/// The library folder, with a menu to open or change it.
+struct FolderChip: View {
+    @EnvironmentObject var store: Store
+
+    var body: some View {
+        Menu {
+            Button("Show in Finder") { NSWorkspace.shared.open(store.folderURL) }
+            Button("Choose Another Folder…") {
+                if let url = pickFiles(types: [], directories: true, message: "Choose the folder where you keep your IPAs").first { store.watchFolder = url.path }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "folder.fill").foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text((store.watchFolder as NSString).lastPathComponent).font(.system(size: 12, weight: .semibold))
+                    Text("Library folder").font(.system(size: 10.5)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .card()
+        .help("Every IPA in \((store.watchFolder as NSString).abbreviatingWithTildeInPath) shows up here")
+    }
+}
+
 struct AppCard: View {
     @EnvironmentObject var store: Store
     var app: LibraryApp
     @State private var hovering = false
+    @State private var confirmRemove = false
 
     private var job: Job? { store.jobs.first { $0.appId == app.id } }
 
@@ -156,7 +184,11 @@ struct AppCard: View {
                     }
                 }
                 Spacer(minLength: 4)
-                ExpiryRing(app: app)
+                if app.isInstalled {
+                    ExpiryRing(app: app)
+                } else {
+                    Pill(text: "Not installed", symbol: "arrow.down.circle", color: .secondary)
+                }
             }
             if let job {
                 VStack(alignment: .leading, spacing: 4) {
@@ -165,17 +197,29 @@ struct AppCard: View {
                 }
             } else if let err = app.lastError {
                 Text(err).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2).help(err)
+            } else if !app.isInstalled {
+                Text("In your library folder. Install it to put it on your phone.").font(.system(size: 11)).foregroundStyle(.secondary)
             } else {
                 Text(expiryText(app)).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
-                Button {
-                    store.install(app)
-                } label: {
-                    Label(store.hasNewBuild(app) ? "Update" : "Refresh", systemImage: "arrow.clockwise")
+                if app.isInstalled {
+                    Button {
+                        store.install(app)
+                    } label: {
+                        Label(store.hasNewBuild(app) ? "Update" : "Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(PrimaryButtonStyle(color: app.health == .expired ? .red : .accentColor))
+                    .disabled(job != nil || app.sourcePath == nil || !store.isConnected(app))
+                } else {
+                    Button {
+                        store.edit(app)
+                    } label: {
+                        Label("Install…", systemImage: "arrow.down.to.line")
+                    }
+                    .buttonStyle(PrimaryButtonStyle(color: .green))
+                    .disabled(job != nil || app.sourcePath == nil)
                 }
-                .buttonStyle(PrimaryButtonStyle(color: app.health == .expired ? .red : .accentColor))
-                .disabled(job != nil || app.sourcePath == nil || !store.isConnected(app))
 
                 Button("Edit") { store.edit(app) }
                     .disabled(job != nil)
@@ -194,7 +238,7 @@ struct AppCard: View {
                             Task { await store.uninstall(bundleId: id, from: udid) }
                         }
                     }
-                    Button("Remove from Library", role: .destructive) { store.remove(app) }
+                    Button("Remove…", role: .destructive) { confirmRemove = true }
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.system(size: 15))
                 }
@@ -205,13 +249,39 @@ struct AppCard: View {
         }
         .padding(16)
         .card(highlighted: hovering)
+        .overlay(alignment: .topLeading) {
+            if hovering && job == nil {
+                Button { confirmRemove = true } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.gray.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .offset(x: -7, y: -7)
+                .help("Remove \(app.displayName)")
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .onHover { hovering = $0 }
+        .confirmationDialog("Remove \(app.displayName)?", isPresented: $confirmRemove) {
+            Button("Remove from Sideport") { store.remove(app, .libraryOnly) }
+            if app.isInstalled, app.installedBundleId != nil, store.isConnected(app) {
+                Button("Remove and Delete from \(app.deviceName ?? "iPhone")", role: .destructive) { store.remove(app, .alsoFromDevice) }
+            }
+            if FileManager.default.fileExists(atPath: app.ipaPath) {
+                Button("Remove and Move the IPA to the Trash", role: .destructive) { store.remove(app, .alsoTrashIPA) }
+            }
+        } message: {
+            Text(app.isInstalled ? "Removing it from Sideport doesn't touch the copy on your phone unless you choose to delete it." : "It won't come back from your library folder unless you add it again.")
+        }
         .contextMenu {
             Button("Refresh") { store.install(app) }
             Button("Edit…") { store.edit(app) }
             Button("Export Signed IPA…") { export() }
             Divider()
-            Button("Remove from Library", role: .destructive) { store.remove(app) }
+            Button("Remove…", role: .destructive) { confirmRemove = true }
         }
     }
 
@@ -250,42 +320,6 @@ struct EmptyLibrary: View {
         .frame(maxWidth: .infinity)
         .padding(50)
         .card()
-    }
-}
-
-/// IPAs in the watch folder (~/IPAs) that aren't in the library yet, one click to add.
-struct NewIPAsStrip: View {
-    @EnvironmentObject var store: Store
-    @State private var files: [URL] = []
-
-    var body: some View {
-        VStack(alignment: .leading) {
-            if !files.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    SectionTitle(title: "Found in \(((store.watchFolder as NSString).abbreviatingWithTildeInPath))", subtitle: "Not in your library yet")
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(files, id: \.self) { url in
-                                Button {
-                                    store.add(url: url)
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "shippingbox").foregroundStyle(Color.accentColor)
-                                        Text(url.deletingPathExtension().lastPathComponent).font(.system(size: 12, weight: .medium))
-                                        Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
-                                    }
-                                    .padding(.horizontal, 12).padding(.vertical, 8)
-                                    .card()
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .onAppear { files = store.newIPAsInWatchFolder() }
-        .onChange(of: store.library) { _ in files = store.newIPAsInWatchFolder() }
     }
 }
 
