@@ -78,13 +78,15 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $page) {
+            // Plain buttons rather than List selection, which didn't respond to clicks here.
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(Page.allCases) { p in
-                    // The tag has to be the selection's type (Page?), or clicks don't select anything.
-                    Label(p.rawValue, systemImage: p.symbol).tag(Optional(p))
-                        .badge(badge(p))
+                    SidebarRow(page: p, selected: (page ?? .library) == p, badge: badge(p)) { page = p }
                 }
+                Spacer()
             }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
             .safeAreaInset(edge: .bottom) { sidebarFooter }
         } detail: {
@@ -112,7 +114,10 @@ struct RootView: View {
             .animation(.spring(response: 0.3), value: store.toast)
         }
         .sheet(item: $store.draft) { d in InstallSheet(draft: d).environmentObject(store) }
-        .sheet(item: $store.prompt) { p in PromptSheet(prompt: p).environmentObject(store) }
+        .sheet(item: Binding(get: { store.signingIn && store.prompt?.kind == "two_factor" ? nil : store.prompt },
+                             set: { if $0 == nil && !store.signingIn { store.prompt = nil } })) { p in
+            PromptSheet(prompt: p).environmentObject(store)
+        }
         .alert("Sideport can't run", isPresented: .constant(store.engineError != nil)) {
             Button("Quit") { NSApp.terminate(nil) }
         } message: {
@@ -134,6 +139,43 @@ struct RootView: View {
             Text(store.currentAccount?.email ?? "Not signed in").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
         }
         .padding(12)
+    }
+}
+
+struct SidebarRow: View {
+    var page: Page
+    var selected: Bool
+    var badge: Int
+    var action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: page.symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(selected ? Color.white : Color.accentColor)
+                    .frame(width: 18)
+                Text(page.rawValue).font(.system(size: 13, weight: selected ? .semibold : .regular))
+                Spacer()
+                if badge > 0 {
+                    Text("\(badge)").font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background((selected ? Color.white : Color.primary).opacity(0.18), in: Capsule())
+                }
+            }
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(selected ? Color.accentColor : Color.primary.opacity(hovering ? 0.07 : 0))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 

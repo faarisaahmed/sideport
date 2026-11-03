@@ -187,6 +187,21 @@ struct LoginSheet: View {
     @State private var error: String?
 
     var body: some View {
+        Group {
+            if let p = store.prompt, p.kind == "two_factor" {
+                TwoFactorView(prompt: p)
+            } else {
+                form
+            }
+        }
+        .padding(30)
+        .frame(width: 440)
+        .frame(minHeight: 340)
+        .onAppear { store.signingIn = true }
+        .onDisappear { store.signingIn = false }
+    }
+
+    private var form: some View {
         VStack(spacing: 16) {
             Image(systemName: "apple.logo").font(.system(size: 34))
             Text("Sign in with your Apple ID").font(.title3.weight(.semibold))
@@ -196,7 +211,10 @@ struct LoginSheet: View {
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                if busy { ProgressView().controlSize(.small) }
+                if busy {
+                    ProgressView().controlSize(.small)
+                    Text("Talking to Apple…").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
                 Button("Sign In") {
                     busy = true
                     error = nil
@@ -215,56 +233,81 @@ struct LoginSheet: View {
                 .disabled(email.isEmpty || password.isEmpty || busy)
             }
         }
-        .padding(26)
-        .frame(width: 380)
     }
 }
 
-/// Two-factor code entry and other questions from the engine.
-struct PromptSheet: View {
+/// The verification code step, shown inside the sign-in sheet (or on its own if Apple asks again later).
+struct TwoFactorView: View {
     @EnvironmentObject var store: Store
     var prompt: Prompt
     @State private var code = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(spacing: 16) {
+            Image(systemName: "lock.shield").font(.system(size: 38)).foregroundStyle(Color.accentColor)
+            Text("Enter the verification code").font(.title3.weight(.semibold))
+            Text(prompt.method == "sms" ? "Apple sent a 6-digit code by text message." : "Apple sent a 6-digit code to your other devices.")
+                .foregroundStyle(.secondary).multilineTextAlignment(.center)
+            TextField("", text: $code, prompt: Text("000000"))
+                .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain)
+                .padding(.vertical, 10)
+                .frame(width: 240)
+                .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.accentColor.opacity(focused ? 0.8 : 0.25), lineWidth: 1.5))
+                .focused($focused)
+                .onAppear { focused = true }
+                .onChange(of: code) { v in
+                    let digits = String(v.filter(\.isNumber).prefix(6))
+                    if digits != v { code = digits }
+                    if digits.count == 6 { store.answerPrompt(["code": digits]) }
+                }
+                .onSubmit { if code.count == 6 { store.answerPrompt(["code": code]) } }
+            if !prompt.phones.isEmpty {
+                Menu("Text Me a Code Instead") {
+                    ForEach(prompt.phones, id: \.id) { p in Button(p.label) { store.answerPrompt(["sms_phone": p.id]) } }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            HStack {
+                Button("Cancel") { store.answerPrompt(["cancel": true]) }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Continue") { store.answerPrompt(["code": code]) }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(code.count < 6)
+            }
+        }
+    }
+}
+
+/// Questions from the engine outside sign-in: a later code request, or revoking a certificate.
+struct PromptSheet: View {
+    @EnvironmentObject var store: Store
+    var prompt: Prompt
+
+    var body: some View {
+        Group {
             if prompt.kind == "two_factor" {
-                Image(systemName: "lock.shield").font(.system(size: 34)).foregroundStyle(Color.accentColor)
-                Text("Enter the verification code").font(.title3.weight(.semibold))
-                Text(prompt.method == "sms" ? "Apple sent a code by text message." : "Apple sent a code to your other devices.")
-                    .foregroundStyle(.secondary)
-                TextField("123456", text: $code)
-                    .font(.system(size: 26, weight: .semibold, design: .monospaced))
-                    .multilineTextAlignment(.center)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
-                    .onChange(of: code) { v in
-                        code = String(v.filter(\.isNumber).prefix(6))
-                        if code.count == 6 { store.answerPrompt(["code": code]) }
-                    }
-                if !prompt.phones.isEmpty {
-                    Menu("Text Me a Code Instead") {
-                        ForEach(prompt.phones, id: \.id) { p in Button(p.label) { store.answerPrompt(["sms_phone": p.id]) } }
-                    }
-                    .fixedSize()
-                }
-                HStack {
-                    Button("Cancel") { store.answerPrompt(["cancel": true]) }
-                    Spacer()
-                    Button("Continue") { store.answerPrompt(["code": code]) }.buttonStyle(PrimaryButtonStyle()).disabled(code.count < 6)
-                }
+                TwoFactorView(prompt: prompt)
             } else {
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 34)).foregroundStyle(.orange)
-                Text(prompt.message).multilineTextAlignment(.center)
-                HStack {
-                    Button("Cancel") { store.answerPrompt(["confirm": false]) }
-                    Spacer()
-                    Button("Revoke and Continue") { store.answerPrompt(["confirm": true]) }.buttonStyle(PrimaryButtonStyle(color: .orange))
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 34)).foregroundStyle(.orange)
+                    Text(prompt.message).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Cancel") { store.answerPrompt(["confirm": false]) }
+                        Spacer()
+                        Button("Revoke and Continue") { store.answerPrompt(["confirm": true]) }.buttonStyle(PrimaryButtonStyle(color: .orange))
+                    }
                 }
             }
         }
-        .padding(26)
-        .frame(width: 400)
+        .padding(30)
+        .frame(width: 440)
+        .frame(minHeight: 340)
     }
 }
 

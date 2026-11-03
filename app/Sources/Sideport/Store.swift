@@ -13,6 +13,8 @@ final class Store: ObservableObject {
     @Published var accounts: [AccountInfo] = []
     @Published var jobs: [Job] = []
     @Published var prompt: Prompt?
+    /// The sign-in sheet is open; it shows two-factor prompts itself.
+    @Published var signingIn = false
     @Published var activity: [ActivityEntry] = []
     @Published var engineLog: [String] = []
     @Published var engineReady = false
