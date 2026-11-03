@@ -1,6 +1,6 @@
 [package]
 name = "sideport-engine"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "Signing and install engine for Sideport, built on Impactor's libraries"
 license = "MIT"
