@@ -80,7 +80,8 @@ struct RootView: View {
         NavigationSplitView {
             List(selection: $page) {
                 ForEach(Page.allCases) { p in
-                    Label(p.rawValue, systemImage: p.symbol).tag(p)
+                    // The tag has to be the selection's type (Page?), or clicks don't select anything.
+                    Label(p.rawValue, systemImage: p.symbol).tag(Optional(p))
                         .badge(badge(p))
                 }
             }

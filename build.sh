@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds Sideport.app into ./build.
 #   ./build.sh            build
-#   ./build.sh --install  build and copy to ~/Applications (Spotlight and Launchpad find it there)
+#   ./build.sh --install  build and copy to ~/Applications
 set -euo pipefail
 HERE=${0:A:h}
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer MACOSX_DEPLOYMENT_TARGET=13.0
