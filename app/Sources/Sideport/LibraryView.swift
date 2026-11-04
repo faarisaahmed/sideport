@@ -16,6 +16,11 @@ struct LibraryView: View {
         store.appsForSelectedDevice.filter { $0.isInstalled && (($0.daysLeft ?? 0) < store.refreshWhenDaysLeft || store.hasNewBuild($0)) }.count
     }
 
+    // What Refresh All will do (the same apps as Store.refreshAll), for its badge.
+    private var refreshAllCount: Int {
+        store.appsForSelectedDevice.filter { $0.isInstalled && $0.sourcePath != nil }.count
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -73,8 +78,8 @@ struct LibraryView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.clockwise")
                     Text("Refresh All")
-                    if dueCount > 0 {
-                        Text("\(dueCount)").font(.system(size: 11, weight: .bold))
+                    if refreshAllCount > 0 {
+                        Text("\(refreshAllCount)").font(.system(size: 11, weight: .bold))
                             .padding(.horizontal, 6).padding(.vertical, 1)
                             .background(.white.opacity(0.25), in: Capsule())
                     }
