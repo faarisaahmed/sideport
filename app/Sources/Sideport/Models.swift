@@ -167,10 +167,12 @@ struct DeviceInfo: Identifiable, Equatable, Hashable {
     var symbol: String { model.hasPrefix("iPad") ? "ipad" : model.hasPrefix("AppleTV") ? "appletv" : "iphone" }
 }
 
-/// A free Apple ID's limit on new App IDs: `max` (10) every 7 days, `available` of them left now.
+/// A free Apple ID's limit on new App IDs: `max` (10) every 7 days, `available` of them left now, and when the
+/// oldest one in use expires and gives one back.
 struct AppIdQuota: Equatable {
     var available: Int
     var max: Int
+    var nextFree: Date?
 }
 
 struct AccountInfo: Identifiable, Equatable {

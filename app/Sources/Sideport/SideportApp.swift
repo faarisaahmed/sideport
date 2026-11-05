@@ -134,11 +134,42 @@ struct RootView: View {
     }
 
     private var sidebarFooter: some View {
-        HStack(spacing: 8) {
-            Circle().fill(store.engineReady ? Color.green : Color.orange).frame(width: 7, height: 7)
-            Text(store.currentAccount?.email ?? "Not signed in").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .leading, spacing: 5) {
+            if let quota = store.appIdQuota { limits(quota) }
+            HStack(spacing: 8) {
+                Circle().fill(store.engineReady ? Color.green : Color.orange).frame(width: 7, height: 7)
+                Text(store.currentAccount?.email ?? "Not signed in").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            }
         }
         .padding(12)
+    }
+
+    // A free Apple ID's two limits: 3 sideloaded apps on a phone at once, and 10 new App IDs a week.
+    @ViewBuilder private func limits(_ quota: AppIdQuota) -> some View {
+        if let used = store.sideloadedOnPhone {
+            let free = max(0, Store.freeAppLimit - used)
+            limitLine("square.stack.3d.up", free == 1 ? "1 app slot free" : "\(free) app slots free", warn: free == 0,
+                      help: "A free Apple ID can have \(Store.freeAppLimit) sideloaded apps on a phone at once (\(used) now). Delete one from the phone to make room.")
+        }
+        let help = "Each new app, and each app extension it keeps, uses one of \(quota.max) App IDs, which come back 7 days after they were made. Refreshing an app you already have doesn't use one."
+        limitLine("number", quota.available == 1 ? "1 App ID left" : "\(quota.available) App IDs left", warn: quota.available <= 2, help: help)
+        if let back = nextBack(quota) {
+            Text(back).font(.system(size: 10)).foregroundStyle(.tertiary).padding(.leading, 21).padding(.top, -4).help(help)
+        }
+    }
+
+    private func nextBack(_ quota: AppIdQuota) -> String? {
+        guard quota.available < quota.max, let next = quota.nextFree else { return nil }
+        let days = Int((next.timeIntervalSinceNow / 86400).rounded(.up))
+        return days <= 0 ? "next one back today" : days == 1 ? "next one back tomorrow" : "next one back in \(days) days"
+    }
+
+    private func limitLine(_ icon: String, _ text: String, warn: Bool, help: String) -> some View {
+        Label(text, systemImage: warn ? "exclamationmark.triangle.fill" : icon)
+            .font(.system(size: 11))
+            .foregroundStyle(warn ? Color.orange : Color.secondary)
+            .lineLimit(1)
+            .help(help)
     }
 }
 

@@ -245,7 +245,19 @@ final class Store: ObservableObject {
             appIdQuota = nil
             return
         }
-        appIdQuota = AppIdQuota(available: available, max: max)
+        appIdQuota = AppIdQuota(available: available, max: max, nextFree: (r["next_free"] as? String).flatMap(parseDate))
+        // The phone's own list counts sideloaded apps Sideport didn't install too.
+        if let udid = selectedDeviceUDID,
+           let list = try? await engine.call("installed_apps", ["udid": udid]) as? [[String: Any]] {
+            deviceApps[udid] = list.map(DeviceApp.init)
+        }
+    }
+
+    /// Sideloaded apps on the selected phone (they count against a free Apple ID's 3), or nil before its app list
+    /// has been read.
+    var sideloadedOnPhone: Int? {
+        guard let udid = selectedDeviceUDID, let apps = deviceApps[udid] else { return nil }
+        return apps.filter(\.sideloaded).count
     }
 
     func login(email: String, password: String) async throws {
