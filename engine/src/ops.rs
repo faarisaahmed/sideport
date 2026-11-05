@@ -107,6 +107,7 @@ pub async fn handle(cmd: &str, req: &Value) -> Result<Value> {
         "select_team" => select_team(arg(req, "email")?, arg(req, "team")?).await,
         "teams" => teams(arg(req, "email")?).await,
         "app_ids" => app_ids(req).await,
+        "app_id_quota" => app_id_quota(req).await,
         "delete_app_id" => delete_app_id(req).await,
         "certificates" => certificates(req).await,
         "revoke_certificate" => revoke_certificate(req).await,
@@ -312,6 +313,20 @@ async fn app_ids(req: &Value) -> Result<Value> {
     let team = team_for(email, &s, opt(req, "team")).await?;
     let ids = s.qh_list_app_ids(&team).await?;
     Ok(json!(ids.app_ids.iter().map(|a| json!({ "id": a.app_id_id, "identifier": a.identifier })).collect::<Vec<_>>()))
+}
+
+/// How many App IDs the account has and how many more it can make right now. Apple sends the limits for free
+/// accounts only (10 a week); a paid account gets `null` for them.
+async fn app_id_quota(req: &Value) -> Result<Value> {
+    let email = arg(req, "email")?;
+    let s = session(email).await?;
+    let team = team_for(email, &s, opt(req, "team")).await?;
+    let mut body = plist::Dictionary::new();
+    body.insert("teamId".to_string(), plist::Value::String(team));
+    let r = s.qh_send_request("https://developerservices2.apple.com/services/QH65B2/ios/listAppIds.action", Some(body)).await?;
+    let int = |key: &str| r.get(key).and_then(|v| v.as_signed_integer().or_else(|| v.as_unsigned_integer().map(|u| u as i64)));
+    let count = r.get("appIds").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+    Ok(json!({ "count": count, "available": int("availableQuantity"), "max": int("maxQuantity") }))
 }
 
 async fn delete_app_id(req: &Value) -> Result<Value> {

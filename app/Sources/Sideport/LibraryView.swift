@@ -62,6 +62,7 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Your apps").font(.system(size: 28, weight: .bold, design: .rounded))
                 Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary)
+                if let quota = store.appIdQuota { limits(quota).padding(.top, 4) }
             }
             Spacer()
             FolderChip()
@@ -92,6 +93,19 @@ struct LibraryView: View {
         }
     }
 
+    // A free Apple ID's two limits: 3 sideloaded apps on a phone at once, and 10 new App IDs a week.
+    private func limits(_ quota: AppIdQuota) -> some View {
+        let installed = store.appsForSelectedDevice.filter(\.isInstalled).count
+        return HStack(spacing: 8) {
+            LimitChip(icon: "square.stack.3d.up", text: "\(installed) of \(Store.freeAppLimit) apps on this phone",
+                      warn: installed >= Store.freeAppLimit,
+                      help: "A free Apple ID can have \(Store.freeAppLimit) sideloaded apps on a phone at once. Delete one from the phone to make room.")
+            LimitChip(icon: "number", text: "\(quota.available) of \(quota.max) App IDs left this week",
+                      warn: quota.available <= 2,
+                      help: "Each new app, and each app extension it keeps, uses an App ID. Each one comes back 7 days after it was made. Refreshing an app you already have doesn't use one.")
+        }
+    }
+
     private var subtitle: String {
         let all = store.appsForSelectedDevice.filter(\.isInstalled)
         if all.isEmpty { return "Drop an IPA anywhere in this window, or put some in your library folder." }
@@ -100,6 +114,24 @@ struct LibraryView: View {
         if dueCount > 0 { return "\(dueCount) of \(all.count) due for a refresh." }
         if let soonest = all.compactMap(\.daysLeft).min() { return "All \(all.count) apps are signed. Next one expires in \(Int(soonest)) days." }
         return "\(all.count) apps."
+    }
+}
+
+struct LimitChip: View {
+    var icon: String
+    var text: String
+    var warn: Bool
+    var help: String
+
+    var body: some View {
+        Label(text, systemImage: warn ? "exclamationmark.triangle.fill" : icon)
+            .font(.system(size: 12, weight: .medium))
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(warn ? Color.orange : Color.secondary)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background((warn ? Color.orange : Color.primary).opacity(0.08), in: Capsule())
+            .help(help)
     }
 }
 

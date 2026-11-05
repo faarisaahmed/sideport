@@ -7,6 +7,8 @@ import UserNotifications
 @MainActor
 final class Store: ObservableObject {
     static let shared = Store()
+    /// Sideloaded apps a free Apple ID can have on one phone at a time.
+    static let freeAppLimit = 3
 
     @Published var library: [LibraryApp] = []
     @Published var devices: [DeviceInfo] = []
@@ -22,6 +24,7 @@ final class Store: ObservableObject {
     @Published var toast: String?
     @Published var draft: Draft?
     @Published var deviceApps: [String: [DeviceApp]] = [:]
+    @Published var appIdQuota: AppIdQuota?
 
     @Published var selectedDeviceUDID: String? {
         didSet { UserDefaults.standard.set(selectedDeviceUDID, forKey: "device") }
@@ -93,6 +96,7 @@ final class Store: ObservableObject {
         }
         Task {
             await reloadAccounts()
+            await reloadQuota()
             await reloadDevices()
             // `open Sideport.app --args -importSideloadly YES` runs the import at launch (used for testing).
             if UserDefaults.standard.bool(forKey: "importSideloadly"), library.isEmpty { await importSideloadly() }
@@ -233,10 +237,22 @@ final class Store: ObservableObject {
         }
     }
 
+    /// The free account's App IDs left this week (nil for a paid account, or when it can't be read).
+    func reloadQuota() async {
+        guard let email = currentAccount?.email,
+              let r = try? await engine.call("app_id_quota", ["email": email]) as? [String: Any],
+              let available = r["available"] as? Int, let max = r["max"] as? Int else {
+            appIdQuota = nil
+            return
+        }
+        appIdQuota = AppIdQuota(available: available, max: max)
+    }
+
     func login(email: String, password: String) async throws {
         let list = try await engine.call("login", ["email": email, "password": password, "job": "login"]) as? [[String: Any]] ?? []
         accounts = list.map(AccountInfo.init)
         log("Signed in", email, ok: true)
+        Task { await reloadQuota() }
         for i in library.indices where library[i].lastError?.contains("isn't signed in") == true { library[i].lastError = nil }
         saveLibrary()
     }
@@ -245,6 +261,7 @@ final class Store: ObservableObject {
         if let list = try? await engine.call("logout", ["email": email]) as? [[String: Any]] {
             accounts = list.map(AccountInfo.init)
             log("Signed out", email, ok: true)
+            await reloadQuota()
         }
     }
 
@@ -435,6 +452,7 @@ final class Store: ObservableObject {
             let what = exportOnly ? "Exported" : "Installed"
             log("\(what) \(app.displayName)", "\(app.version) on \(app.deviceName ?? "device") in \(secs)s", ok: true)
             showToast("\(app.displayName) \(exportOnly ? "exported" : "is ready") ✓")
+            Task { await reloadQuota() }
         } catch {
             fail(&app, error.localizedDescription)
         }
